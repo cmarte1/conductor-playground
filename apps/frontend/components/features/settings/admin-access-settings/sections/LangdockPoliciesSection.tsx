@@ -630,10 +630,7 @@ function IntegrationPolicyListRow({
           )}
         </Tooltip>
       </TooltipProvider>
-      <ChevronRight
-        className="size-4 shrink-0 text-muted-foreground/40"
-        aria-hidden="true"
-      />
+      {/* Row chevron removed: rows don't open a detail view yet. */}
     </div>
   );
 }
