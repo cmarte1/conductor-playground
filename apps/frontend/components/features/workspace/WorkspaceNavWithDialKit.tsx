@@ -39,7 +39,9 @@ export function WorkspaceNavWithDialKit({
     viewAs: {
       type: 'select',
       options: ['user', 'admin'],
-      default: isOnAdminPage ? 'admin' : 'user',
+      // Demo default: admin, so the full Administration nav (incl. Integration
+      // policies) shows on deployed builds, where DialKit's panel is hidden.
+      default: 'admin',
       label: 'View as',
     },
   });

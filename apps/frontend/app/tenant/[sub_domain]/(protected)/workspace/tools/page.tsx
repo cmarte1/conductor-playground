@@ -14,7 +14,12 @@ import { SharedCredentialsSection } from '@/components/features/settings/admin-a
 import { SharedMcpCredentialsSection } from '@/components/features/settings/admin-access-settings/sections/SharedMcpCredentialsSection';
 import { TenantOAuthAppsSection } from '@/components/features/settings/admin-access-settings/sections/TenantOAuthAppsSection';
 
-export default async function WorkspaceToolsRoute() {
+export default async function WorkspaceToolsRoute({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { tab } = await searchParams;
   const [userData, permissions] = await Promise.all([
     api.users.getUserData(),
     api.users.getPermissions(),
@@ -46,6 +51,7 @@ export default async function WorkspaceToolsRoute() {
       key={entityId}
       companyName={company?.name ?? 'Current company'}
       canManageCredentials={true}
+      initialTab={tab === 'vault' ? 'vault' : 'integrations'}
       customConnections={
         effective ? (
           <McpInventorySection
