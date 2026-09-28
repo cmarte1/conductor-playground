@@ -67,7 +67,7 @@ export function SelectMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-56 overflow-y-auto"
+        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-56 overflow-y-auto rounded-lg"
       >
         <DropdownMenuGroup>
           {menuLabel && (
@@ -79,7 +79,7 @@ export function SelectMenu({
             <DropdownMenuItem
               key={option.value}
               onSelect={() => onChange(option.value)}
-              className="gap-2"
+              className="gap-2 rounded-[3px]"
             >
               {option.icon && <span className="flex shrink-0">{option.icon}</span>}
               <span className="truncate">{option.label}</span>

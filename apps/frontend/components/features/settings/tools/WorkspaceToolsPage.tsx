@@ -33,8 +33,12 @@ import {
   VaultCredentialPreview,
   INITIAL_PREVIEW_CREDENTIALS,
   type PreviewCredential,
-  type SharedCred,
 } from '../admin-access-settings/VaultCredentialPreview';
+import {
+  audienceOf,
+  includesCurrentUser,
+  runsAsOf,
+} from '../admin-access-settings/credentialSharing';
 
 const CATALOG = Array.from(
   new Map([...TOOLS, ...DIRECTORY].map((tool) => [tool.id, tool])).values()
@@ -59,14 +63,32 @@ const INITIAL_CONNECTIONS: DemoConnection[] = TOOLS.filter(
   name: tool.name,
   service: tool.name,
   tool,
-  managedByMe: !['microsoft', 'linear'].includes(tool.id),
-  adminOnly: ['microsoft', 'linear'].includes(tool.id),
+  // Microsoft 365 is enabled by the MSP. Shared connections (Vault) add more org cards below.
+  managedByMe: tool.id !== 'microsoft',
+  adminOnly: tool.id === 'microsoft',
   enabled: true,
   status: tool.state === 'error' ? 'Needs attention' : 'Connected',
   method: 'Account connection',
 }));
 
 const ADMIN_ONLY_CONNECTION_IDS = new Set(['salesforce', 'hubspot']);
+
+/** Vault shared-connection service → the catalog tool it powers. */
+const SERVICE_TOOL_IDS: Record<string, string> = {
+  Asana: 'asana',
+  Canny: 'canny',
+  Figma: 'figma',
+  GitHub: 'github',
+  HubSpot: 'hubspot',
+  Linear: 'linear',
+  Notion: 'notion',
+};
+
+/** What a member needs to know about a connection their org shared with them. */
+const sharedLock = (service: string, handle: string, personal: boolean) =>
+  `Your organization shared this ${service} connection, so your actions run as ${handle}${
+    personal ? ' (a personal account)' : ''
+  }. It replaces your own ${service} connection. Ask a workspace admin to change it.`;
 
 /** A card in "Your connections": an existing connection or a catalog tool. */
 type YourCard =
@@ -161,25 +183,27 @@ export function WorkspaceToolsPage({
     return () => clearTimeout(timer);
   }, [notice]);
 
-  // Add credential modal flows (vault API key handled inside VaultCredentialPreview)
-  type CredentialFlow = 'shared-oauth' | null;
-  const [credentialFlow, setCredentialFlow] = useState<CredentialFlow>(null);
-  const [sharedCreds, setSharedCreds] = useState<SharedCred[]>([]);
-
-  // Shared OAuth form
-  const [oauthName, setOauthName] = useState('');
-  const [oauthService, setOauthService] = useState('');
-
-  const openFlow = (flow: CredentialFlow) => {
-    setOauthName(''); setOauthService('');
-    setCredentialFlow(flow);
-  };
-
   const normalized = query.trim().toLowerCase();
   const [typeFilter, setTypeFilter] = useState<string>(ALL_TYPES);
   const matchesType = (id: string) =>
     typeFilter === ALL_TYPES ||
     (TOOL_TYPES_BY_ID[id] ?? []).some((type) => type === typeFilter);
+
+  // Shared connections from Vault that include me replace my own connection:
+  // they show as organization cards, and the tool leaves "Your connections".
+  // One connection per tool per person: the newest shared connection wins (open question for eng).
+  const sharedWithMe = credentials
+    .flatMap((cred) => {
+      const tool = CATALOG.find((t) => t.id === SERVICE_TOOL_IDS[cred.service ?? '']);
+      return cred.kind === 'connection' && cred.enabled && tool && includesCurrentUser(audienceOf(cred))
+        ? [{ cred, tool }]
+        : [];
+    })
+    .filter(({ tool }, index, all) => all.findIndex((x) => x.tool.id === tool.id) === index);
+  const sharedToolIds = new Set(sharedWithMe.map(({ tool }) => tool.id));
+  const orgShared = sharedWithMe.filter(
+    ({ tool }) => matchesType(tool.id) && tool.name.toLowerCase().includes(normalized)
+  );
 
   const orgConnections = connections.filter(
     (item) =>
@@ -190,6 +214,7 @@ export function WorkspaceToolsPage({
   const myConnections = connections.filter(
     (item) =>
       item.managedByMe &&
+      !sharedToolIds.has(item.id) &&
       matchesType(item.id) &&
       `${item.name} ${item.service}`.toLowerCase().includes(normalized)
   );
@@ -198,7 +223,8 @@ export function WorkspaceToolsPage({
     (tool) =>
       !connections.some((c) => c.id === tool.id) &&
       matchesType(tool.id) &&
-      !['microsoft', 'linear'].includes(tool.id) &&
+      tool.id !== 'microsoft' &&
+      !sharedToolIds.has(tool.id) &&
       tool.type !== 'Desktop' &&
       `${tool.name} ${tool.description ?? ''}`.toLowerCase().includes(normalized)
   );
@@ -297,9 +323,9 @@ export function WorkspaceToolsPage({
       <Tabs value={tab} onValueChange={changeTab}>
         <div className="flex items-center gap-2">
           <TabsList aria-label="Integrations">
-            <TabsTrigger value="integrations">Integrations</TabsTrigger>
+            <TabsTrigger value="integrations" className="rounded-sm">Integrations</TabsTrigger>
             {canManageCredentials && (
-              <TabsTrigger value="vault">Vault</TabsTrigger>
+              <TabsTrigger value="vault" className="rounded-sm">Vault</TabsTrigger>
             )}
           </TabsList>
           {tab !== 'vault' && (
@@ -333,8 +359,25 @@ export function WorkspaceToolsPage({
         {/* ── Integrations tab ── */}
         <TabsContent value="integrations" className="mt-7 space-y-10">
 
-          {orgConnections.length > 0 && (
+          {orgConnections.length + orgShared.length > 0 && (
             <ToolCardSection title="Organization">
+              {orgShared.map(({ cred, tool }) => {
+                const runsAs = runsAsOf(cred);
+                const lock = sharedLock(cred.service ?? tool.name, runsAs.handle, runsAs.kind === 'personal');
+                return (
+                  <ToolCard
+                    key={cred.id}
+                    logo={<ToolLogo tool={tool} />}
+                    label={tool.name}
+                    description={`Runs as ${runsAs.handle} · shared by ${
+                      !cred.createdBy || cred.createdBy === 'Chris Marte' ? 'you' : cred.createdBy
+                    }`}
+                    action={<TrayButton disabled>Disconnect</TrayButton>}
+                    actionLockedReason={lock}
+                    toggle={{ checked: true, lockedReason: lock }}
+                  />
+                );
+              })}
               {orgConnections.map((item) => (
                 <ToolCard
                   key={item.id}
@@ -439,86 +482,13 @@ export function WorkspaceToolsPage({
               onCredentialsChange={setCredentials}
               openCredential={openCredential}
               onViewConnections={() => changeTab('integrations')}
-              onAddSharedCredential={() => openFlow('shared-oauth')}
               addMcpRequest={addMcpRequest}
-              sharedCredentials={sharedCreds}
-              onSharedCredentialsChange={setSharedCreds}
             />
             {/* Production MCP inventory / shared-credential sections are folded into the
                 cards above for the demo; see customConnections/existingCredentials props. */}
           </TabsContent>
         )}
       </Tabs>
-
-      {/* ── Shared OAuth credential dialog ── */}
-      <Dialog
-        open={credentialFlow === 'shared-oauth'}
-        onOpenChange={(open) => { if (!open) setCredentialFlow(null); }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add sign-in</DialogTitle>
-            <DialogDescription>
-              Sign in to a service once so your team&apos;s agents can use that account.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setSharedCreds((prev) => [
-                ...prev,
-                {
-                  id: `shared-oauth-${Date.now()}`,
-                  name: oauthName.trim(),
-                  service: oauthService.trim(),
-                  type: 'oauth',
-                  enabled: true,
-                },
-              ]);
-              setCredentialFlow(null);
-            }}
-          >
-            <div className="space-y-2">
-              <Label htmlFor="oauth-name">Connection name</Label>
-              <Input
-                id="oauth-name"
-                required
-                placeholder="e.g. Marketing Salesforce"
-                value={oauthName}
-                onChange={(e) => setOauthName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="oauth-service">Service</Label>
-              <Input
-                id="oauth-service"
-                required
-                placeholder="e.g. Salesforce, Google Workspace"
-                value={oauthService}
-                onChange={(e) => setOauthService(e.target.value)}
-              />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              In production this will open a browser window to complete the OAuth
-              authorization flow with {oauthService || 'the service'}.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setCredentialFlow(null)}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={!oauthName.trim() || !oauthService.trim()}
-              >
-                {oauthService.trim()
-                  ? `Connect ${oauthService.trim()}`
-                  : 'Connect'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <FloatingNotice notice={notice} />
 

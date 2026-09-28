@@ -141,13 +141,13 @@ export function ActionMenu({
           <MoreVertical className={size === 'lg' ? 'size-4' : 'size-3.5'} aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
+      <DropdownMenuContent align="end" className="w-52 rounded-lg">
         {items.map(({ label: itemLabel, icon: Icon, onSelect, destructive, disabled, separated }) => (
           <Fragment key={itemLabel}>
             {separated && <DropdownMenuSeparator />}
             <DropdownMenuItem
               disabled={disabled}
-              className={cn(destructive && 'text-destructive focus:text-destructive')}
+              className={cn('rounded-[3px]', destructive && 'text-destructive focus:text-destructive')}
               onSelect={onSelect}
             >
               <Icon className="size-4" aria-hidden="true" />
@@ -199,7 +199,8 @@ export function ConnectButton({
       disabled={disabled || loading}
       className={cn(
         trayButton,
-        'border-transparent bg-[#171717] text-white hover:bg-[#171717]/85'
+        // Icon side carries its own air; shave the left padding so it looks even.
+        'border-transparent bg-[#171717] pl-2.5 text-white hover:bg-[#171717]/85'
       )}
       onClick={onClick}
     >
@@ -265,7 +266,7 @@ export function ToolCard({
   };
 }) {
   return (
-    <div className="rounded-xl border bg-muted/40 pt-0.5 px-0.5 pb-[9px]">
+    <div className="rounded-[11px] border bg-muted/40 pt-0.5 px-0.5 pb-[9px]">
       <div
         className={cn(
           'h-[120px] rounded-lg border bg-background p-4 shadow-sm',
