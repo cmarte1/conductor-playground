@@ -32,6 +32,7 @@ import type {
   ToolPolicyRow,
 } from '../types';
 import { IntegrationLogo } from './IntegrationRow';
+import { SIGN_IN_APP_TOOLS, SignInMethodButton } from './SignInMethodDialog';
 
 type AccessMode = 'enable-all' | 'select-specific';
 type SortBy = 'popular' | 'alpha';
@@ -611,6 +612,8 @@ function IntegrationPolicyListRow({
           {connectedCount > 0 ? `${connectedCount} connected` : 'No accounts'}
         </span>
       )}
+      {/* Tenant OAuth app: how the team signs in, set per tool (moved out of Vault). */}
+      {enabled && SIGN_IN_APP_TOOLS.has(row.id) && <SignInMethodButton toolName={row.name} />}
       <TooltipProvider delayDuration={100}>
         <Tooltip>
           <TooltipTrigger asChild>

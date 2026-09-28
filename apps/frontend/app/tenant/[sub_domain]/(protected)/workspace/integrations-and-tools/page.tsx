@@ -30,7 +30,9 @@ const DEMO_POLICY: EffectiveAdminAccessPolicy = {
     { id: 'github', name: 'GitHub', description: 'Access repos, PRs, and issues.', effectiveDecision: 'allow', effectiveSource: 'default', localDecision: null, lock: null, iconUrl: null },
     { id: 'microsoft_365', name: 'Microsoft 365', description: 'Office suite, Teams, and OneDrive.', effectiveDecision: 'allow', effectiveSource: 'msp', localDecision: null, lock: { source: 'msp', message: 'Enabled by your MSP — cannot be changed here.' }, iconUrl: null },
     { id: 'asana', name: 'Asana', description: 'Task tracking and project management.', effectiveDecision: 'deny', effectiveSource: 'tenant', localDecision: 'deny', lock: null, iconUrl: null },
-    { id: 'salesforce', name: 'Salesforce', description: 'CRM and sales pipeline data.', effectiveDecision: 'deny', effectiveSource: 'msp', localDecision: null, lock: { source: 'msp', message: 'Restricted by your MSP — cannot be enabled here.' }, iconUrl: null },
+    // Enabled so its sign-in method (company app) can be demoed; HubSpot carries the MSP restriction example.
+    { id: 'salesforce', name: 'Salesforce', description: 'CRM and sales pipeline data.', effectiveDecision: 'allow', effectiveSource: 'default', localDecision: null, lock: null, iconUrl: null },
+    { id: 'hubspot', name: 'HubSpot', description: 'CRM contacts, deals, and marketing.', effectiveDecision: 'deny', effectiveSource: 'msp', localDecision: null, lock: { source: 'msp', message: 'Restricted by your MSP — cannot be enabled here.' }, iconUrl: null },
   ],
   builtInTools: [],
   aiModels: [],
