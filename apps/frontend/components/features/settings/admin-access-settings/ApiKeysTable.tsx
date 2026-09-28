@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import {
   KeySearchInput,
   KeyStatusBadge,
+  RevealCell,
   RowActionsMenu,
   SortableHead,
   nextSort,
@@ -21,17 +22,25 @@ import {
 } from './KeyTableParts';
 import { CredentialProviderLogo } from './CredentialProviderLogo';
 import type { PreviewCredential } from './VaultCredentialPreview';
+import {
+  SharedWithCell,
+  audienceOf,
+  peopleCount,
+  runsAsOf,
+  type CredentialKind,
+} from './credentialSharing';
 
-// Provider API keys table on the app's Table primitives. Columns answer the
-// list's jobs: is it working (Status), who relies on it (Used by), is it stale
-// (Last used), who do I ask (the "added by" subline). The masked secret lives
-// in the key's detail view, not here.
+// Vault credentials table (Provider API keys and Shared connections) on the
+// app's Table primitives. Columns answer the list's jobs: is it working
+// (Status), who can use it and as whom (Shared with — detail on hover), is it
+// stale (Last used), who do I ask (the "added by" subline). The masked secret
+// lives in the credential's detail view, not here.
 
 export const CURRENT_USER = 'Chris Marte';
 /** Prototype stand-in: the current user is a workspace admin. */
 export const CURRENT_USER_IS_ADMIN = true;
 
-type SortKey = 'name' | 'status' | 'usedBy' | 'lastUsed' | 'created';
+type SortKey = 'name' | 'status' | 'sharedWith' | 'lastUsed' | 'created';
 
 const createdByOf = (item: PreviewCredential) => item.createdBy ?? CURRENT_USER;
 const createdTime = (item: PreviewCredential) => {
@@ -54,10 +63,6 @@ const lastUsedTime = (item: PreviewCredential) => {
   const time = Date.parse(value);
   return Number.isNaN(time) ? 0 : time;
 };
-const usedByLabel = (item: PreviewCredential) =>
-  item.agents.length
-    ? `${item.agents.length} agent${item.agents.length === 1 ? '' : 's'}`
-    : 'Not in use';
 
 /** Masked preview only; the prototype never holds a real secret. */
 export function maskedKey(item: PreviewCredential) {
@@ -78,12 +83,13 @@ function statusOf(item: PreviewCredential): { label: string; tone: StatusTone } 
 const sortValue: Record<SortKey, (item: PreviewCredential) => string | number> = {
   name: (item) => item.name.toLowerCase(),
   status: (item) => statusOf(item).label,
-  usedBy: (item) => item.agents.length,
+  sharedWith: (item) => peopleCount(audienceOf(item)) * 10 + item.agents.length,
   lastUsed: lastUsedTime,
   created: createdTime,
 };
 
 export function ApiKeysTable({
+  kind = 'apiKey',
   credentials,
   search,
   onSearchChange,
@@ -91,7 +97,11 @@ export function ApiKeysTable({
   onToggleActive,
   onDelete,
   emptyState,
+  revealId,
 }: {
+  /** Newly added row: its cells ease open so the table grows smoothly. */
+  revealId?: string | null;
+  kind?: CredentialKind;
   credentials: PreviewCredential[];
   search: string;
   onSearchChange: (value: string) => void;
@@ -103,12 +113,12 @@ export function ApiKeysTable({
 }) {
   const [sort, setSort] = useState<SortState<SortKey>>({ key: 'created', dir: 'desc' });
   const onSort = (key: SortKey) =>
-    setSort((prev) => nextSort(prev, key, ['created', 'usedBy', 'lastUsed']));
+    setSort((prev) => nextSort(prev, key, ['created', 'sharedWith', 'lastUsed']));
 
   const query = search.trim().toLowerCase();
   const rows = useMemo(() => {
     const matches = credentials.filter((item) =>
-      [item.name, item.service ?? 'OpenAI', createdByOf(item), ...item.agents]
+      [item.name, item.service ?? 'OpenAI', createdByOf(item), runsAsOf(item).handle, ...item.agents, ...(item.sharing?.roles ?? [])]
         .join(' ')
         .toLowerCase()
         .includes(query)
@@ -125,13 +135,17 @@ export function ApiKeysTable({
 
   return (
     <div className="space-y-3">
-      <KeySearchInput value={search} onChange={onSearchChange} />
+      <KeySearchInput
+        value={search}
+        onChange={onSearchChange}
+        placeholder={kind === 'apiKey' ? 'Search keys…' : 'Search connections…'}
+      />
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <SortableHead label="Name" column="name" sort={sort} onSort={onSort} className="w-[42%]" />
             <SortableHead label="Status" column="status" sort={sort} onSort={onSort} />
-            <SortableHead label="Used by" column="usedBy" sort={sort} onSort={onSort} />
+            <SortableHead label="Shared with" column="sharedWith" sort={sort} onSort={onSort} />
             <SortableHead label="Last used" column="lastUsed" sort={sort} onSort={onSort} />
             <TableHead className="h-10 w-12 px-3">
               <span className="sr-only">Actions</span>
@@ -149,7 +163,7 @@ export function ApiKeysTable({
                 onClick={editable ? () => onOpen(item) : undefined}
                 className={cn(editable ? 'cursor-pointer' : 'hover:bg-transparent')}
               >
-                <TableCell className="px-3 py-3">
+                <RevealCell reveal={item.id === revealId} className="px-3 py-3">
                   <div className="flex items-center gap-3">
                     <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm ring-1 ring-black/[0.06]">
                       <CredentialProviderLogo service={item.service ?? 'OpenAI'} size={18} />
@@ -175,23 +189,25 @@ export function ApiKeysTable({
                       </span>
                     </div>
                   </div>
-                </TableCell>
-                <TableCell className="px-3 py-3">
+                </RevealCell>
+                <RevealCell reveal={item.id === revealId} className="px-3 py-3">
                   <KeyStatusBadge tone={status.tone}>{status.label}</KeyStatusBadge>
-                </TableCell>
-                <TableCell
-                  className={cn(
-                    'px-3 py-3 text-sm',
-                    item.agents.length ? 'text-muted-foreground' : 'text-muted-foreground/70'
-                  )}
-                  title={item.agents.join(', ') || undefined}
+                </RevealCell>
+                <RevealCell
+                  reveal={item.id === revealId}
+                  className="px-3 py-3"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {usedByLabel(item)}
-                </TableCell>
-                <TableCell className="px-3 py-3 text-sm text-muted-foreground">
+                  <SharedWithCell
+                    audience={audienceOf(item)}
+                    runsAs={runsAsOf(item)}
+                    service={item.service ?? 'OpenAI'}
+                  />
+                </RevealCell>
+                <RevealCell reveal={item.id === revealId} className="px-3 py-3 text-sm text-muted-foreground">
                   {item.lastUsed ?? 'Never'}
-                </TableCell>
-                <TableCell
+                </RevealCell>
+                <RevealCell reveal={item.id === revealId}
                   className="px-3 py-3 text-right"
                   onClick={(e) => e.stopPropagation()}
                 >
@@ -213,14 +229,14 @@ export function ApiKeysTable({
                       ]}
                     />
                   )}
-                </TableCell>
+                </RevealCell>
               </TableRow>
             );
           })}
           {!rows.length && (
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
-                No keys match “{search.trim()}”.
+                No {kind === 'apiKey' ? 'keys' : 'connections'} match “{search.trim()}”.
               </TableCell>
             </TableRow>
           )}

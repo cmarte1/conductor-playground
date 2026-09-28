@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  Children,
   useEffect,
   useRef,
   useState,
@@ -9,16 +8,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  Server,
-  Trash2,
-  Info,
-  Power,
-  SlidersHorizontal,
-} from 'lucide-react';
+import { ArrowRight, ChevronDown, Info, KeyRound, Trash2 } from 'lucide-react';
 import {
   Popover,
   PopoverContent,
@@ -26,38 +16,49 @@ import {
 } from '@/components/ui/Popover';
 import { AddApiKeyDialog } from './AddApiKeyDialog';
 import { McpServersSection } from './McpServersSection';
-import { SelectMenu } from '../tools/SelectMenu';
 import {
   ApiKeyIllustration,
   McpServerIllustration,
   SharedCredentialIllustration,
 } from './VaultEmptyIllustrations';
 import { CredentialProviderLogo } from './CredentialProviderLogo';
-import {
-  ActionMenu,
-  FloatingNotice,
-  LogoTile,
-  StatusPill,
-  type ActionMenuItem,
-  type Notice,
-} from '../tools/ToolCard';
+import { FloatingNotice, LogoTile, StatusPill, type Notice } from '../tools/ToolCard';
 import Link from 'next/link';
 import { ApiKeysTable, CURRENT_USER } from './ApiKeysTable';
 import { KeyCrossLink } from './KeyTableParts';
+import {
+  ShareAccessPanel,
+  ShareConfirmActions,
+  ShareConfirmBody,
+  audienceOf,
+  needsShareConfirmation,
+  peopleCount,
+  peopleLabel,
+  runsAsOf,
+  shareConfirmTitle,
+  type CredentialKind,
+  type RunsAs,
+  type ShareAudience,
+} from './credentialSharing';
 
 // What you do in each section, said once. `section` sits under the section title;
 // `menu` is the one-line version for the Add credential menu (it has to fit one row).
+// `section` also says what sharing does there, since that differs by section:
+// keys add access; shared connections and MCP credentials replace people's own.
 const CREDENTIAL_TYPE_COPY = {
   apiKey: {
-    section: 'Paste a key from a service like OpenAI or Stripe so agents can use it',
+    section:
+      'Paste a key from a service like OpenAI or Stripe so agents can use it. Sharing adds access; no one can view the key.',
     menu: 'Paste a key from OpenAI, Stripe, and more',
   },
-  oauth: {
-    section: "Sign in to a service once so your team's agents can use that account",
-    menu: "Sign in once for your team's agents",
+  connection: {
+    section:
+      "Connect a tool once with a shared account. Sharing replaces each person's own connection, so their actions run as that account.",
+    menu: 'Connect a tool once with a shared account',
   },
   mcp: {
-    section: 'Connect a server your team runs to give agents new tools',
+    section:
+      "Connect a server your team runs to give agents new tools. A shared credential replaces each person's own sign-in to it.",
     menu: 'Connect a server that adds new tools',
   },
 } as const;
@@ -73,8 +74,15 @@ function EditorStatusPill({ item, busy }: { item: PreviewCredential; busy: boole
 
 /** One line on who loses access, then the permanence. */
 function deleteImpact(item: PreviewCredential | null): string {
-  const names = [...(item?.agents ?? []), ...(item?.teammates ?? [])];
-  if (!names.length) return "Nothing uses this key yet. This can't be undone.";
+  if (!item) return "This can't be undone.";
+  const audience = audienceOf(item);
+  const people = audience.workspace
+    ? `Everyone in the workspace (${peopleLabel(peopleCount(audience))})`
+    : audience.roles.length
+      ? `${audience.roles.join(', ')} (${peopleLabel(peopleCount(audience))})`
+      : '';
+  const names = [people, ...audience.agents].filter(Boolean);
+  if (!names.length) return "Nothing else uses this yet. This can't be undone.";
   const who =
     names.length === 1
       ? names[0]
@@ -110,78 +118,6 @@ function EmptyState({ illustration, title, body, action }: EmptyStateProps) {
   );
 }
 
-function CredentialGroup({
-  title,
-  description,
-  empty,
-  children,
-}: {
-  title: string;
-  description: string;
-  empty: EmptyStateProps;
-  children: ReactNode;
-}) {
-  const hasRows = Children.count(children) > 0;
-  return (
-    <section className="rounded-xl border bg-background px-4 pb-1.5 pt-4 shadow-sm">
-      <h5 className="text-sm font-medium text-foreground">{title}</h5>
-      <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
-      <div className="mt-2 divide-y divide-dashed">
-        {hasRows ? children : <EmptyState {...empty} />}
-      </div>
-    </section>
-  );
-}
-
-function CredentialRow({
-  logo,
-  name,
-  description,
-  status,
-  onOpen,
-  actions,
-}: {
-  logo: ReactNode;
-  name: string;
-  description: string;
-  status: ReactNode;
-  onOpen: () => void;
-  actions: ActionMenuItem[];
-}) {
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className="-mx-2 flex cursor-pointer items-center gap-3 rounded-lg px-2 py-3 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <LogoTile>{logo}</LogoTile>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className="truncate text-sm font-medium text-foreground">{name}</p>
-          <span className="shrink-0">{status}</span>
-        </div>
-        <p className="truncate text-sm text-muted-foreground">{description}</p>
-      </div>
-      {/* Menu clicks bubble through the portal; keep them from opening the row. */}
-      <div
-        className="shrink-0"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <ActionMenu label={name} items={actions} size="lg" />
-      </div>
-    </div>
-  );
-}
-
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
@@ -197,10 +133,15 @@ type ConnectionState = 'untested' | 'testing' | 'connected' | 'failed';
 type Section = 'Connection' | 'Access' | 'Details';
 export interface PreviewCredential {
   id: string;
+  /** Provider API key (default) or shared connection. */
+  kind?: CredentialKind;
   service?: string;
   createdAt?: string;
   modifiedAt?: string;
-  teammates?: string[];
+  /** Who besides the owner can use it. Agents live in `agents`. */
+  sharing?: { workspace: boolean; roles: string[] };
+  /** The account the connection check reported. */
+  runsAs?: RunsAs;
   /** Defaults to the current user; only the creator can edit a key. */
   createdBy?: string;
   /** Masked preview shown in the key's detail view; never a real secret. */
@@ -214,26 +155,8 @@ export interface PreviewCredential {
   agents: string[];
   activity: string[];
 }
-export type SharedCred = {
-  id: string;
-  name: string;
-  service: string;
-  type: 'oauth' | 'mcp';
-  enabled: boolean;
-};
-// Demo workspace members for sharing. The signed-in demo user owns new keys.
+// The signed-in demo user owns new credentials.
 const CURRENT_TEAMMATE = { name: 'Chris Marte', email: 'cmarte@hatz.ai' };
-const TEAMMATES = [
-  { name: 'Nick Kim', email: 'nkim@hatz.ai' },
-  { name: 'Alex Kim', email: 'akim@hatz.ai' },
-  { name: 'Marco Marena', email: 'mmarena@hatz.ai' },
-  { name: 'Jordan Lee', email: 'jlee@hatz.ai' },
-];
-const AGENTS = [
-  'Research assistant',
-  'Customer success agent',
-  'Analytics reporter',
-];
 export const INITIAL_PREVIEW_CREDENTIALS: PreviewCredential[] = [
   {
     id: 'demo-openai-01',
@@ -242,6 +165,7 @@ export const INITIAL_PREVIEW_CREDENTIALS: PreviewCredential[] = [
     state: 'connected',
     enabled: true,
     agents: ['Research assistant'],
+    sharing: { workspace: false, roles: ['Engineering'] },
     createdAt: 'Sep 22, 2026, 10:14 AM',
     keyPreview: 'sk-proj_2224...47d6',
     lastUsed: '12 minutes ago',
@@ -272,6 +196,35 @@ export const INITIAL_PREVIEW_CREDENTIALS: PreviewCredential[] = [
     agents: [...agents],
     activity: [`Credential created · ${createdBy}`],
   })),
+  // Shared connections. GitHub is the risky pattern on purpose: a personal
+  // account shared with the whole workspace.
+  ...(
+    [
+      ['demo-conn-github', 'GitHub (engineering)', 'GitHub', 'Jordan Lee', 'Sep 18, 2026, 2:10 PM', 'ghp_8Kq2...x91c', '5 minutes ago', { handle: '@jordanlee', kind: 'personal' }, { workspace: true, roles: [] }, ['Research assistant']],
+      ['demo-conn-linear', 'Linear team bot', 'Linear', 'Nick Kim', 'Sep 12, 2026, 9:30 AM', 'lin_api_4f2a...77be', '1 hour ago', { handle: 'hatz-bot@hatz.ai', kind: 'service' }, { workspace: false, roles: ['Engineering', 'Workspace admins'] }, []],
+      ['demo-conn-hubspot', 'HubSpot sales', 'HubSpot', 'Marco Marena', 'Sep 15, 2026, 11:05 AM', 'pat-na1-...3d0e', 'Sep 27, 2026', { handle: 'sales-ops@hatz.ai', kind: 'service' }, { workspace: false, roles: ['Sales', 'Customer success'] }, ['Customer success agent']],
+    ] as const
+  ).map(([id, name, service, createdBy, createdAt, keyPreview, lastUsed, runsAs, sharing, agents]) => ({
+    id,
+    kind: 'connection' as const,
+    name,
+    service,
+    createdBy,
+    createdAt,
+    keyPreview,
+    lastUsed,
+    runsAs: { ...runsAs },
+    sharing: { workspace: sharing.workspace, roles: [...sharing.roles] },
+    organization: '',
+    state: 'connected' as const,
+    enabled: true,
+    agents: [...agents],
+    activity: [
+      `Shared with ${sharing.workspace ? 'everyone in the workspace' : sharing.roles.join(', ')} · ${createdBy}`,
+      `Connected as ${runsAs.handle} · ${createdBy}`,
+      `Credential created · ${createdBy}`,
+    ],
+  })),
 ];
 
 function ProviderIcon({ service = 'OpenAI' }: { service?: string }) {
@@ -289,21 +242,15 @@ export function VaultCredentialPreview({
   onCredentialsChange,
   openCredential,
   onViewConnections,
-  onAddSharedCredential,
   addMcpRequest = 0,
-  sharedCredentials = [],
-  onSharedCredentialsChange,
 }: {
   testResult?: string;
   credentials?: PreviewCredential[];
   onCredentialsChange?: Dispatch<SetStateAction<PreviewCredential[]>>;
   openCredential?: { id: string; request: number };
   onViewConnections?: () => void;
-  onAddSharedCredential?: () => void;
   /** Increment to open Add MCP server (e.g. from the Integrations "Don't see your tool?" link). */
   addMcpRequest?: number;
-  sharedCredentials?: SharedCred[];
-  onSharedCredentialsChange?: Dispatch<SetStateAction<SharedCred[]>>;
 }) {
   const [localCredentials, setLocalCredentials] = useState<PreviewCredential[]>(
     INITIAL_PREVIEW_CREDENTIALS
@@ -311,14 +258,18 @@ export function VaultCredentialPreview({
   const credentials = providedCredentials ?? localCredentials;
   const setCredentials = onCredentialsChange ?? setLocalCredentials;
   const [search, setSearch] = useState('');
+  const [connectionSearch, setConnectionSearch] = useState('');
   const [addKeyOpen, setAddKeyOpen] = useState(false);
+  const [addKind, setAddKind] = useState<CredentialKind>('apiKey');
+  const [revealId, setRevealId] = useState<string | null>(null);
   const [mcpAddRequest, setMcpAddRequest] = useState(0);
   useEffect(() => {
     if (addMcpRequest > 0) setMcpAddRequest((n) => n + 1);
   }, [addMcpRequest]);
   // Remounts the dialog so every add starts fresh.
   const [addKeyVersion, setAddKeyVersion] = useState(0);
-  const openAddKey = () => {
+  const openAddKey = (kind: CredentialKind = 'apiKey') => {
+    setAddKind(kind);
     setAddKeyVersion((v) => v + 1);
     setAddKeyOpen(true);
   };
@@ -339,12 +290,11 @@ export function VaultCredentialPreview({
   // Delete started from a card's menu (editor closed); falls back to the open editor.
   const [pendingDelete, setPendingDelete] = useState<PreviewCredential | null>(null);
   const deleteTarget = pendingDelete ?? editor;
-  const [sharedEditorId, setSharedEditorId] = useState<string | null>(null);
-  const sharedEditor = sharedCredentials.find((c) => c.id === sharedEditorId);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [agent, setAgent] = useState('');
-  const [teammate, setTeammate] = useState('');
-  const [agentAccessOpen, setAgentAccessOpen] = useState(false);
+  // Access tab edits a draft; widening to everyone or sharing a personal account confirms first.
+  const [accessDraft, setAccessDraft] = useState<ShareAudience | null>(null);
+  const [accessVersion, setAccessVersion] = useState(0);
+  const [confirmAccess, setConfirmAccess] = useState(false);
   const testTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledOpenRequest = useRef<number | null>(null);
   useEffect(() => {
@@ -359,6 +309,7 @@ export function VaultCredentialPreview({
     if (item) {
       setEditor(item);
       setSection('Connection');
+      setAccessDraft(audienceOf(item));
       handledOpenRequest.current = openCredential.request;
     }
   }, [openCredential, credentials]);
@@ -379,6 +330,14 @@ export function VaultCredentialPreview({
         editor.organization !== saved.organization)
   );
   const busy = editor?.state === 'testing';
+  const editorKind: CredentialKind = editor?.kind ?? 'apiKey';
+  const secretNoun = editorKind === 'apiKey' ? 'key' : 'token';
+  const savedAudience = saved ? audienceOf(saved) : null;
+  const accessDirty = Boolean(
+    accessDraft &&
+      savedAudience &&
+      JSON.stringify(accessDraft) !== JSON.stringify(savedAudience)
+  );
 
   function persist(next: PreviewCredential) {
     setEditor(next);
@@ -413,7 +372,22 @@ export function VaultCredentialPreview({
     setReplacing(false);
     setError('');
     setNotice('');
-    setAgent('');
+    setAccessDraft(audienceOf(item));
+    setAccessVersion((v) => v + 1);
+  }
+  function applyAccess(next: ShareAudience) {
+    if (!editor) return;
+    const who = next.workspace
+      ? 'everyone in the workspace'
+      : next.roles.length
+        ? next.roles.join(', ')
+        : 'only the owner';
+    record(
+      { ...editor, agents: next.agents, sharing: { workspace: next.workspace, roles: next.roles } },
+      `Access changed: ${who}${next.agents.length ? ` + ${next.agents.join(', ')}` : ''}`
+    );
+    setConfirmAccess(false);
+    setNotice('Access updated.');
   }
   function save() {
     if (!editor) return;
@@ -466,7 +440,7 @@ export function VaultCredentialPreview({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border bg-muted/40 p-0.5">
+      <div className="rounded-[15px] border bg-muted/40 p-0.5">
         <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3">
           <div>
             <h4 className="text-sm font-medium text-foreground">
@@ -483,30 +457,26 @@ export function VaultCredentialPreview({
                   <ChevronDown className="size-3.5 opacity-70" aria-hidden="true" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="end" className="w-80 p-2">
+              <PopoverContent align="end" className="w-80 rounded-xl p-2">
                 <button
                   type="button"
-                  className="block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted"
-                  onClick={() => {
-                    openAddKey();
-                  }}
+                  className="block w-full rounded-[3px] px-3 py-2 text-left transition-colors hover:bg-muted"
+                  onClick={() => openAddKey('apiKey')}
                 >
                   <p className="text-sm font-medium">Provider API key</p>
                   <p className="truncate text-xs text-muted-foreground">{CREDENTIAL_TYPE_COPY.apiKey.menu}</p>
                 </button>
-                {onAddSharedCredential && (
-                  <button
-                    type="button"
-                    className="block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted"
-                    onClick={onAddSharedCredential}
-                  >
-                    <p className="text-sm font-medium">Sign-in</p>
-                    <p className="truncate text-xs text-muted-foreground">{CREDENTIAL_TYPE_COPY.oauth.menu}</p>
-                  </button>
-                )}
                 <button
                   type="button"
-                  className="block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted"
+                  className="block w-full rounded-[3px] px-3 py-2 text-left transition-colors hover:bg-muted"
+                  onClick={() => openAddKey('connection')}
+                >
+                  <p className="text-sm font-medium">Shared connection</p>
+                  <p className="truncate text-xs text-muted-foreground">{CREDENTIAL_TYPE_COPY.connection.menu}</p>
+                </button>
+                <button
+                  type="button"
+                  className="block w-full rounded-[3px] px-3 py-2 text-left transition-colors hover:bg-muted"
                   onClick={() => setMcpAddRequest((n) => n + 1)}
                 >
                   <p className="text-sm font-medium">MCP server</p>
@@ -518,12 +488,11 @@ export function VaultCredentialPreview({
         <div className="space-y-0.5">
           <section className="rounded-xl border bg-background px-4 pb-6 pt-4 shadow-sm">
             <h5 className="text-sm font-medium text-foreground">Provider API keys</h5>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              {`${CREDENTIAL_TYPE_COPY.apiKey.section}.`}
-            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">{CREDENTIAL_TYPE_COPY.apiKey.section}</p>
             <div className="mt-4">
               <ApiKeysTable
-                credentials={credentials}
+                credentials={credentials.filter((c) => (c.kind ?? 'apiKey') === 'apiKey')}
+                revealId={revealId}
                 search={search}
                 onSearchChange={setSearch}
                 onOpen={openEditor}
@@ -541,7 +510,7 @@ export function VaultCredentialPreview({
                     illustration={<ApiKeyIllustration />}
                     title="No provider API keys yet"
                     body="Paste a key from a service like OpenAI or Stripe so your agents can use it."
-                    action={{ label: 'Add provider API key', onClick: () => openAddKey() }}
+                    action={{ label: 'Add provider API key', onClick: () => openAddKey('apiKey') }}
                   />
                 }
               />
@@ -557,65 +526,42 @@ export function VaultCredentialPreview({
             </div>
           </section>
 
-          {(['oauth'] as const).map((type) => (
-            <CredentialGroup
-              key={type}
-              title="Sign-ins"
-              description={`${CREDENTIAL_TYPE_COPY[type].section}.`}
-              empty={{
-                illustration: <SharedCredentialIllustration />,
-                title: 'No sign-ins yet',
-                body: 'Sign in to a service once and everyone in the workspace can use it.',
-                action: onAddSharedCredential && {
-                  label: 'Add sign-in',
-                  onClick: onAddSharedCredential,
-                },
-              }}
-            >
-              {sharedCredentials
-                .filter((c) => c.type === type)
-                .map((item) => (
-                  <CredentialRow
-                    key={item.id}
-                    logo={<CredentialProviderLogo service={item.service} size={24} />}
-                    name={item.name}
-                    description={`${item.service} · Shared with the workspace`}
-                    status={
-                      item.enabled ? (
-                        <StatusPill tone="success">Connected</StatusPill>
-                      ) : (
-                        <StatusPill tone="neutral">Disabled</StatusPill>
-                      )
-                    }
-                    onOpen={() => setSharedEditorId(item.id)}
-                    actions={[
-                      { label: 'Manage credential', icon: SlidersHorizontal, onSelect: () => setSharedEditorId(item.id) },
-                      {
-                        label: item.enabled ? 'Disable credential' : 'Enable credential',
-                        icon: Power,
-                        separated: true,
-                        onSelect: () =>
-                          onSharedCredentialsChange?.((prev) =>
-                            prev.map((c) => (c.id === item.id ? { ...c, enabled: !c.enabled } : c))
-                          ),
-                      },
-                      {
-                        label: 'Delete credential',
-                        icon: Trash2,
-                        destructive: true,
-                        onSelect: () =>
-                          onSharedCredentialsChange?.((prev) => prev.filter((c) => c.id !== item.id)),
-                      },
-                    ]}
+          <section className="rounded-xl border bg-background px-4 pb-6 pt-4 shadow-sm">
+            <h5 className="text-sm font-medium text-foreground">Shared connections</h5>
+            <p className="mt-0.5 text-sm text-muted-foreground">{CREDENTIAL_TYPE_COPY.connection.section}</p>
+            <div className="mt-4">
+              <ApiKeysTable
+                kind="connection"
+                credentials={credentials.filter((c) => c.kind === 'connection')}
+                revealId={revealId}
+                search={connectionSearch}
+                onSearchChange={setConnectionSearch}
+                onOpen={openEditor}
+                onToggleActive={(item) =>
+                  setCredentials((items) =>
+                    items.map((c) => (c.id === item.id ? { ...c, enabled: !c.enabled } : c))
+                  )
+                }
+                onDelete={(item) => {
+                  setPendingDelete(item);
+                  setConfirmDelete(true);
+                }}
+                emptyState={
+                  <EmptyState
+                    illustration={<SharedCredentialIllustration />}
+                    title="No shared connections yet"
+                    body="Connect a tool once with a shared account so people don't each connect their own."
+                    action={{ label: 'Add shared connection', onClick: () => openAddKey('connection') }}
                   />
-                ))}
-            </CredentialGroup>
-          ))}
+                }
+              />
+            </div>
+          </section>
 
           {/* One list for MCP servers; each server carries its credentials. */}
           <McpServersSection
             title="MCP servers"
-            description={`${CREDENTIAL_TYPE_COPY.mcp.section}.`}
+            description={CREDENTIAL_TYPE_COPY.mcp.section}
             addRequest={mcpAddRequest}
             emptyState={(onAdd) => (
               <EmptyState
@@ -626,21 +572,31 @@ export function VaultCredentialPreview({
               />
             )}
           />
+
+          <ManagedElsewhere />
         </div>
       </div>
 
       <AddApiKeyDialog
         key={addKeyVersion}
+        kind={addKind}
         open={addKeyOpen}
         onOpenChange={setAddKeyOpen}
-        agents={AGENTS}
-        teammates={TEAMMATES}
         currentUser={CURRENT_TEAMMATE}
         onAdded={(key) => {
           // The dialog already checked the key and collected agent access.
+          const id = crypto.randomUUID();
+          setRevealId(id);
+          const { audience } = key;
+          const sharedWith = audience.workspace
+            ? 'everyone in the workspace'
+            : audience.roles.join(', ');
           setCredentials((items) => [
             {
-              id: crypto.randomUUID(),
+              id,
+              kind: key.kind,
+              runsAs: key.runsAs,
+              sharing: { workspace: audience.workspace, roles: audience.roles },
               name: key.name,
               service: key.service,
               keyPreview: key.keyPreview,
@@ -653,12 +609,11 @@ export function VaultCredentialPreview({
               lastUsed: 'Never',
               state: 'connected',
               enabled: true,
-              agents: key.agents,
-              teammates: key.teammates,
+              agents: audience.agents,
               activity: [
-                ...key.teammates.map((name) => `Shared with ${name} · ${CURRENT_USER} · Just now`),
-                ...key.agents.map((agent) => `${agent} connected · ${CURRENT_USER} · Just now`),
-                `Connection tested successfully · ${CURRENT_USER} · Just now`,
+                ...(sharedWith ? [`Shared with ${sharedWith} · ${CURRENT_USER} · Just now`] : []),
+                ...audience.agents.map((agent) => `${agent} connected · ${CURRENT_USER} · Just now`),
+                `Connected as ${key.runsAs.handle} · ${CURRENT_USER} · Just now`,
                 `Credential created · ${CURRENT_USER} · Just now`,
               ],
             },
@@ -766,7 +721,8 @@ export function VaultCredentialPreview({
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <Label htmlFor="credential-key">
-                            API key <span className="text-destructive">*</span>
+                            {editorKind === 'apiKey' ? 'API key' : 'Access token'}{' '}
+                            <span className="text-destructive">*</span>
                           </Label>
                           {saved && !replacing && (
                             <div className="flex items-center gap-1">
@@ -813,11 +769,24 @@ export function VaultCredentialPreview({
                           {saved && !replacing && editor.state === 'failed'
                             ? `${editor.service ?? 'OpenAI'} didn't accept this key. Replace it, then test again.`
                             : replacing
-                            ? 'Existing agent assignments stay in place. Save the replacement and test it again before the next demo run.'
+                            ? peopleCount(audienceOf(editor)) > 1
+                              ? `The new ${secretNoun} changes the account for ${peopleLabel(peopleCount(audienceOf(editor)))}. Who has access stays the same.`
+                              : `Who has access stays the same. Save the replacement and test it again.`
                             : saved
-                              ? `Key ending in ${editor.keyPreview?.slice(-4) ?? '••••'}. The full key can't be displayed; replace it to make a change.`
+                              ? `Ending in ${editor.keyPreview?.slice(-4) ?? '••••'}. The full ${secretNoun} can't be displayed; replace it to make a change.`
                               : 'Use made-up text, not a real secret. This prototype discards the key on save.'}
                         </p>
+                        {saved && !replacing && (
+                          <p className="text-xs text-muted-foreground">
+                            Runs as{' '}
+                            <span className="font-medium text-foreground">{runsAsOf(editor).handle}</span>
+                            {runsAsOf(editor).kind === 'personal'
+                              ? ` · personal ${editor.service ?? 'OpenAI'} account`
+                              : runsAsOf(editor).kind === 'service'
+                                ? ' · service account'
+                                : ''}
+                          </p>
+                        )}
                         {(!saved || replacing) && (
                           <Button
                             variant="ghost"
@@ -879,260 +848,69 @@ export function VaultCredentialPreview({
                         !dirty && (
                           <div className="flex items-center justify-between gap-4 border-t pt-5">
                             <div>
-                              <p className="text-sm font-medium">
-                                Ready to put this credential to work?
-                              </p>
+                              <p className="text-sm font-medium">Who can use this?</p>
                               <p className="mt-1 text-xs text-muted-foreground">
-                                Choose an agent that is allowed to use it.
+                                {audienceOf(editor).workspace || audienceOf(editor).roles.length || audienceOf(editor).agents.length
+                                  ? `Shared with ${peopleLabel(peopleCount(audienceOf(editor)))}${audienceOf(editor).agents.length ? ` and ${audienceOf(editor).agents.length} agent${audienceOf(editor).agents.length === 1 ? '' : 's'}` : ''}.`
+                                  : 'Only you so far.'}
                               </p>
                             </div>
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setSection('Access');
-                                setAgentAccessOpen(true);
-                              }}
-                            >
-                              Connect to agent <ChevronRight />
+                            <Button variant="outline" onClick={() => setSection('Access')}>
+                              Manage access <ArrowRight className="size-4" aria-hidden="true" />
                             </Button>
                           </div>
                         )}
                     </div>
                   )}
 
-                  {section === 'Access' && (
-                    <div className="space-y-7">
-                      <p className="flex items-start gap-2 text-sm leading-5 text-muted-foreground">
-                        <Info className="mt-0.5 size-4 shrink-0" />
-                        Sharing allows teammates to use this credential in
-                        permitted skills. They cannot view the saved key. Agent
-                        access is assigned separately.
-                      </p>
-                      <div className="flex gap-2">
-                        <SelectMenu
-                          ariaLabel="Share with teammates"
-                          className="min-w-0 flex-1"
-                          value={teammate}
-                          onChange={setTeammate}
-                          disabled={!saved || busy || dirty}
-                          placeholder="Share with teammates"
-                          menuLabel="Teammates"
-                          options={['Alex Morgan', 'Jordan Lee', 'Sam Patel']
-                            .filter((name) => !editor.teammates?.includes(name))
-                            .map((name) => ({ value: name, label: name }))}
-                        />
-                        {teammate && (
-                          <Button
-                            disabled={!saved || busy || dirty}
-                            onClick={() => {
-                              record(
-                                {
-                                  ...editor,
-                                  teammates: [
-                                    ...(editor.teammates ?? []),
-                                    teammate,
-                                  ],
-                                },
-                                `Shared with ${teammate}`
-                              );
-                              setTeammate('');
-                            }}
-                          >
-                            Share
-                          </Button>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 py-1">
-                        <span className="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-medium">
-                          CM
-                        </span>
-                        <div className="flex-1 text-sm">
-                          Chris Marte{' '}
-                          <span className="text-muted-foreground">(you)</span>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Can manage this credential
-                          </p>
-                        </div>
-                        <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">
-                          Owner
-                        </span>
-                      </div>
-                      {editor.teammates?.map((name) => (
-                        <div
-                          key={name}
-                          className="flex items-center gap-3 text-sm"
-                        >
-                          <span className="flex size-9 items-center justify-center rounded-full bg-muted text-xs">
-                            {name
-                              .split(' ')
-                              .map((part) => part[0])
-                              .join('')}
-                          </span>
-                          <span className="flex-1">{name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            Can use
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`Remove teammate ${name}`}
-                            disabled={busy || dirty}
-                            onClick={() =>
-                              record(
-                                {
-                                  ...editor,
-                                  teammates: editor.teammates?.filter(
-                                    (person) => person !== name
-                                  ),
-                                },
-                                `Sharing removed for ${name}`
-                              )
-                            }
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
-                      <details
-                        open={agentAccessOpen}
-                        onToggle={(event) =>
-                          setAgentAccessOpen(event.currentTarget.open)
-                        }
-                        className="border-t pt-5"
-                      >
-                        <summary className="cursor-pointer text-sm font-medium">
-                          Agent access
-                        </summary>
-                        <div className="space-y-4 pt-5">
-                          <div>
-                            <h3 className="text-sm font-medium leading-5">
-                              Agents with access
-                            </h3>
-                            <p className="mt-2 text-sm text-muted-foreground">
-                              These agents can use the credential for a
-                              supported
-                              {editor.service ?? 'OpenAI'} action. The model
-                              never sees the key.
-                            </p>
-                          </div>
-                          {(!saved ||
-                            dirty ||
-                            editor.state !== 'connected' ||
-                            !editor.enabled) && (
-                            <p className="rounded-lg bg-muted p-3 text-sm">
-                              Save and successfully test an enabled credential
-                              before connecting an agent.
-                            </p>
-                          )}
-                          <div className="flex gap-2">
-                            <SelectMenu
-                              ariaLabel="Choose an agent"
-                              className="min-w-0 flex-1"
-                              value={agent}
-                              onChange={setAgent}
-                              placeholder="Choose an eligible agent…"
-                              menuLabel="Agents"
-                              options={AGENTS.filter(
-                                (name) => !editor.agents.includes(name)
-                              ).map((name) => ({ value: name, label: name }))}
-                            />
+                  {section === 'Access' && accessDraft && (
+                    <div className="mx-auto max-w-xl space-y-5">
+                      {!saved || editor.state !== 'connected' || !editor.enabled ? (
+                        <p className="flex items-start gap-2 rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                          Save and successfully test an enabled credential before sharing it.
+                        </p>
+                      ) : (
+                        <>
+                          <ShareAccessPanel
+                            key={accessVersion}
+                            kind={editorKind}
+                            service={editor.service ?? 'OpenAI'}
+                            runsAs={runsAsOf(editor)}
+                            value={accessDraft}
+                            onChange={setAccessDraft}
+                            currentUserEmail={CURRENT_TEAMMATE.email}
+                          />
+                          <div className="flex justify-end gap-2">
+                            {accessDirty && savedAudience && (
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setAccessDraft(savedAudience);
+                                  setAccessVersion((v) => v + 1);
+                                }}
+                              >
+                                Reset
+                              </Button>
+                            )}
                             <Button
-                              disabled={
-                                !agent ||
-                                !saved ||
-                                dirty ||
-                                editor.state !== 'connected' ||
-                                !editor.enabled
-                              }
+                              disabled={!accessDirty}
+                              className="bg-[#171717] text-white hover:bg-[#171717]/85"
                               onClick={() => {
-                                record(
-                                  {
-                                    ...editor,
-                                    agents: [...editor.agents, agent],
-                                  },
-                                  `Access granted to ${agent}`
-                                );
-                                setNotice('Agent connected.');
-                                setAgent('');
+                                const widening =
+                                  savedAudience !== null &&
+                                  (peopleCount(accessDraft) > peopleCount(savedAudience) ||
+                                    (accessDraft.workspace && !savedAudience.workspace));
+                                if (widening && needsShareConfirmation(accessDraft, runsAsOf(editor)))
+                                  setConfirmAccess(true);
+                                else applyAccess(accessDraft);
                               }}
                             >
-                              Connect agent
+                              Save access
                             </Button>
                           </div>
-                          {editor.agents.length === 0 ? (
-                            <div className="rounded-lg border border-dashed px-4 py-7 text-center">
-                              <Bot className="mx-auto mb-2 size-6 text-muted-foreground" />
-                              <p className="text-sm font-medium">
-                                No agents connected yet
-                              </p>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                Saving a credential does not automatically grant
-                                access.
-                              </p>
-                            </div>
-                          ) : (
-                            editor.agents.map((name) => (
-                              <div
-                                key={name}
-                                className="flex flex-wrap items-center gap-3 rounded-lg border p-4"
-                              >
-                                <Bot className="size-5 text-muted-foreground" />
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium">{name}</p>
-                                  <p className="mt-1 text-xs text-muted-foreground">
-                                    Demo action: generate a text response
-                                  </p>
-                                </div>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={busy || dirty}
-                                  onClick={() => {
-                                    const allowed =
-                                      editor.enabled &&
-                                      editor.state === 'connected';
-                                    record(
-                                      editor,
-                                      allowed
-                                        ? `${name}: demo action completed`
-                                        : `${name}: demo action blocked`
-                                    );
-                                    setNotice(
-                                      allowed
-                                        ? 'Demo action completed successfully.'
-                                        : 'Action blocked: credential is disabled or not verified.'
-                                    );
-                                  }}
-                                >
-                                  Run demo
-                                </Button>
-                                <Button
-                                  aria-label={`Remove ${name}`}
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={busy || dirty}
-                                  onClick={() => {
-                                    record(
-                                      {
-                                        ...editor,
-                                        agents: editor.agents.filter(
-                                          (item) => item !== name
-                                        ),
-                                      },
-                                      `Access revoked for ${name}; future demo runs denied`
-                                    );
-                                    setNotice(
-                                      `${name} can no longer use this credential.`
-                                    );
-                                  }}
-                                >
-                                  Remove
-                                </Button>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </details>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1307,59 +1085,25 @@ export function VaultCredentialPreview({
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog
-        open={Boolean(sharedEditor)}
-        onOpenChange={(open) => {
-          if (!open) setSharedEditorId(null);
-        }}
-      >
-        <DialogContent>
-          {sharedEditor && (
+      <Dialog open={confirmAccess} onOpenChange={setConfirmAccess}>
+        <DialogContent className="max-w-[560px]">
+          {editor && accessDraft && (
             <>
-              <div className="flex items-center gap-3">
-                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background">
-                  {sharedEditor.type === 'mcp' ? (
-                    <Server className="size-5 text-muted-foreground" aria-hidden="true" />
-                  ) : (
-                    <CredentialProviderLogo service={sharedEditor.service} size={28} />
-                  )}
-                </span>
-                <div className="min-w-0">
-                  <DialogTitle className="truncate">{sharedEditor.name}</DialogTitle>
-                  <DialogDescription>
-                    {sharedEditor.type === 'mcp'
-                      ? 'Shared MCP server'
-                      : 'Sign-in'}{' '}
-                    · {sharedEditor.service} · Available to everyone in the workspace
-                  </DialogDescription>
-                </div>
-              </div>
-              <div className="flex justify-between gap-2 border-t pt-4">
-                <Button
-                  variant="outline"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => {
-                    onSharedCredentialsChange?.((prev) =>
-                      prev.filter((c) => c.id !== sharedEditor.id)
-                    );
-                    setSharedEditorId(null);
-                  }}
-                >
-                  <Trash2 className="size-4" aria-hidden="true" /> Delete
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    onSharedCredentialsChange?.((prev) =>
-                      prev.map((c) =>
-                        c.id === sharedEditor.id ? { ...c, enabled: !c.enabled } : c
-                      )
-                    )
-                  }
-                >
-                  {sharedEditor.enabled ? 'Disable credential' : 'Enable credential'}
-                </Button>
-              </div>
+              <DialogTitle>{shareConfirmTitle(accessDraft, runsAsOf(editor))}</DialogTitle>
+              <DialogDescription>
+                {editor.name} · {editor.service ?? 'OpenAI'}
+              </DialogDescription>
+              <ShareConfirmBody
+                kind={editorKind}
+                service={editor.service ?? 'OpenAI'}
+                runsAs={runsAsOf(editor)}
+                audience={accessDraft}
+              />
+              <ShareConfirmActions
+                audience={accessDraft}
+                onBack={() => setConfirmAccess(false)}
+                onConfirm={() => applyAccess(accessDraft)}
+              />
             </>
           )}
         </DialogContent>
@@ -1380,5 +1124,66 @@ export function VaultCredentialPreview({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// Secrets that are set up where their job lives, listed here so every secret the
+// workspace holds can be found in one place (the audit view). Read-only.
+const MANAGED_ELSEWHERE = [
+  {
+    id: 'salesforce-app',
+    logo: <CredentialProviderLogo service="Salesforce" size={20} />,
+    name: 'Salesforce company sign-in app',
+    detail: 'Client secret · everyone still signs in with their own account',
+    where: 'Integration policies',
+    href: '/workspace/integrations-and-tools',
+  },
+  {
+    id: 'slack-agent',
+    logo: <CredentialProviderLogo service="Slack" size={20} />,
+    name: 'Slack Agent app',
+    detail: 'Bot token and signing secret',
+    where: 'Channels',
+    href: '/workspace/channels',
+  },
+  {
+    id: 'scim',
+    logo: <KeyRound className="size-4 text-muted-foreground" aria-hidden="true" />,
+    name: 'SCIM provisioning token',
+    detail: 'Issued by Hatz for your identity provider',
+    where: 'Admin console → SAML',
+  },
+];
+
+function ManagedElsewhere() {
+  return (
+    <section className="rounded-xl border bg-background px-4 pb-2 pt-4 shadow-sm">
+      <h5 className="text-sm font-medium text-foreground">Managed elsewhere</h5>
+      <p className="mt-0.5 text-sm text-muted-foreground">
+        Other secrets this workspace holds. They&apos;re set up where they&apos;re used and listed
+        here so you can find every one.
+      </p>
+      <ul className="mt-2 divide-y divide-dashed">
+        {MANAGED_ELSEWHERE.map((item) => (
+          <li key={item.id} className="flex items-center gap-3 py-3">
+            <LogoTile>{item.logo}</LogoTile>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-foreground">{item.name}</p>
+              <p className="truncate text-xs text-muted-foreground">{item.detail}</p>
+            </div>
+            {item.href ? (
+              <Link
+                href={item.href}
+                className="shrink-0 text-sm text-info-500 underline-offset-4 hover:text-info-500/80 hover:underline"
+              >
+                Managed in {item.where} →
+              </Link>
+            ) : (
+              <span className="shrink-0 text-sm text-muted-foreground">Managed in {item.where}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

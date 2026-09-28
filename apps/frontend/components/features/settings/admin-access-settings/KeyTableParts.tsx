@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronsUpDown,
@@ -16,7 +16,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu';
 import { Input } from '@/components/ui/Input';
-import { TableHead } from '@/components/ui/Table';
+import { TableCell, TableHead } from '@/components/ui/Table';
 import { cn } from '@/lib/utils';
 
 // Shared pieces for key tables (Vault provider keys, Hatz API keys) so both
@@ -117,11 +117,11 @@ export function RowActionsMenu({ label, actions }: { label: string; actions: Row
           <MoreHorizontal className="size-4" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40">
+      <DropdownMenuContent align="end" className="w-40 rounded-lg">
         {actions.map(({ label: actionLabel, icon: Icon, onSelect, destructive }) => (
           <DropdownMenuItem
             key={actionLabel}
-            className={cn(destructive && 'text-destructive focus:text-destructive')}
+            className={cn('rounded-[3px]', destructive && 'text-destructive focus:text-destructive')}
             onSelect={onSelect}
           >
             <Icon className="size-4" aria-hidden="true" />
@@ -136,9 +136,11 @@ export function RowActionsMenu({ label, actions }: { label: string; actions: Row
 export function KeySearchInput({
   value,
   onChange,
+  placeholder = 'Search keys…',
 }: {
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
 }) {
   return (
     <div className="relative w-64">
@@ -147,8 +149,8 @@ export function KeySearchInput({
         aria-hidden="true"
       />
       <Input
-        aria-label="Search keys"
-        placeholder="Search keys…"
+        aria-label={placeholder.replace('…', '')}
+        placeholder={placeholder}
         className="h-9 pl-9"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -160,4 +162,47 @@ export function KeySearchInput({
 /** Centred one-liner under a key table pointing to the other kind of key. */
 export function KeyCrossLink({ children }: { children: ReactNode }) {
   return <p className="pt-4 text-center text-sm text-muted-foreground">{children}</p>;
+}
+
+/**
+ * Table cell whose content grows open when `reveal` is set, so a newly added
+ * row eases the table taller instead of popping in. Padding lives inside the
+ * animated box (0fr -> 1fr grid rows) so the whole row height animates.
+ */
+export function RevealCell({
+  reveal = false,
+  className,
+  children,
+  ...cellProps
+}: Omit<ComponentProps<typeof TableCell>, 'className'> & {
+  reveal?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(!reveal);
+  useEffect(() => {
+    if (!reveal) return;
+    // Two frames: paint collapsed first, then transition open.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setOpen(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [reveal]);
+  return (
+    <TableCell {...cellProps} className="p-0">
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none',
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className={className}>{children}</div>
+        </div>
+      </div>
+    </TableCell>
+  );
 }

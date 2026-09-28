@@ -1,16 +1,14 @@
 'use client';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { notifyLoading, notifySuccess } from '../tools/prototypeToast';
 import {
   AlertTriangle,
-  Bot,
   ChevronDown,
   ChevronRight,
   ExternalLink,
   Loader2,
   Search,
-  Trash2,
-  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import {
@@ -24,11 +22,28 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { cn } from '@/lib/utils';
 import { CredentialProviderLogo } from './CredentialProviderLogo';
-import { CREDENTIAL_SERVICES } from './CredentialServicePicker';
+import {
+  CONNECTION_SERVICES,
+  EMPTY_AUDIENCE,
+  PROVIDER_KEY_SERVICES,
+  ShareAccessPanel,
+  ShareConfirmActions,
+  ShareConfirmBody,
+  needsShareConfirmation,
+  shareConfirmTitle,
+  simulateRunsAs,
+  type CredentialKind,
+  type RunsAs,
+  type ShareAudience,
+} from './credentialSharing';
 
-// Add provider API key, service-first:
-//   1. choose the service  2. get + paste the key (guided), save and check
-//   3. result in the modal, then grant agents so the key is actually usable.
+// Add a Vault credential, service-first. Two kinds share this flow:
+//   - Provider API key: a key agents call a service with (OpenAI, Stripe…).
+//   - Shared connection: one token that powers a Hatz integration for the team,
+//     replacing each person's own connection.
+// Steps: 1. choose the service  2. get + paste the key (guided), save and check
+//   3. share (People | Agents), with the account it runs as  4. confirm broad
+//   or personal-account shares.
 // Local prototype only: the check is simulated and the full key never leaves
 // this dialog; only a masked preview is handed back.
 
@@ -41,6 +56,7 @@ export function detectProvider(key: string): string | null {
   if (value.startsWith('ghp_') || value.startsWith('github_pat_')) return 'GitHub';
   if (value.startsWith('lin_api_')) return 'Linear';
   if (value.startsWith('secret_') || value.startsWith('ntn_')) return 'Notion';
+  if (value.startsWith('pat-')) return 'HubSpot';
   if (value.startsWith('pat')) return 'Airtable';
   return null;
 }
@@ -79,6 +95,16 @@ const KEY_GUIDES: Record<string, Guide> = {
     linkLabel: 'Open Stripe API keys',
     steps: ['Open Developers → API keys in Stripe', 'Create a restricted key with only the access you need', 'Copy it and paste it below'],
   },
+  Linear: {
+    url: 'https://linear.app/settings/account/security',
+    linkLabel: 'Open Linear API settings',
+    steps: ['Sign in to Linear with the account agents should act as', 'Open Settings → Security & access → Personal API keys', 'Create a key, copy it, and paste it below'],
+  },
+  HubSpot: {
+    url: 'https://app.hubspot.com/private-apps',
+    linkLabel: 'Open HubSpot private apps',
+    steps: ['Create a private app in HubSpot with only the scopes you need', 'Copy its access token', 'Paste it below'],
+  },
   Notion: {
     url: 'https://www.notion.so/my-integrations',
     linkLabel: 'Open Notion integrations',
@@ -100,37 +126,36 @@ const guideFor = (service: string): Guide =>
   };
 
 export type NewApiKey = {
+  kind: CredentialKind;
   name: string;
   service: string;
   organization: string;
   keyPreview: string;
-  /** Agents granted access in the share step. */
-  agents: string[];
-  /** Teammates (display names) the key is shared with; the owner is implicit. */
-  teammates: string[];
+  /** The account the connection check reported. */
+  runsAs: RunsAs;
+  /** Who can use it: workspace or roles, plus agents. */
+  audience: ShareAudience;
 };
 
-type Step = 'service' | 'connect' | 'share';
+type Step = 'service' | 'connect' | 'share' | 'confirm';
+type Checked = Omit<NewApiKey, 'audience' | 'kind'>;
 
 export type Teammate = { name: string; email: string };
 
 export function AddApiKeyDialog({
+  kind = 'apiKey',
   open,
   onOpenChange,
   onAdded,
-  agents,
-  teammates,
   currentUser,
 }: {
+  kind?: CredentialKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdded: (key: NewApiKey) => void;
-  /** Agents that can be granted the new key. */
-  agents: string[];
-  /** Workspace members the key can be shared with (excluding the current user). */
-  teammates: Teammate[];
   currentUser: Teammate;
 }) {
+  const noun = kind === 'apiKey' ? 'key' : 'token';
   const [step, setStep] = useState<Step>('service');
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState('');
@@ -144,35 +169,16 @@ export function AddApiKeyDialog({
   const [moreOpen, setMoreOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
-  const [checked, setChecked] = useState<Omit<NewApiKey, 'agents' | 'teammates'> | null>(null);
-  const [granted, setGranted] = useState<string[]>([]);
-  const [sharedUsers, setSharedUsers] = useState<string[]>([]);
-  const [shareTab, setShareTab] = useState<'users' | 'agents'>('users');
-  const [shareQuery, setShareQuery] = useState('');
-  const [shareListOpen, setShareListOpen] = useState(false);
+  const [checked, setChecked] = useState<Checked | null>(null);
+  const [audience, setAudience] = useState<ShareAudience>(EMPTY_AUDIENCE);
 
   const detected = detectProvider(key);
   const mismatch = detected && service && detected !== service ? detected : null;
-  const displayName = nameEdited ? name : service ? `${service} key` : '';
-  const results = CREDENTIAL_SERVICES.filter((s) =>
+  const displayName = nameEdited ? name : service ? `${service} ${kind === 'apiKey' ? 'key' : 'team connection'}` : '';
+  const results = (kind === 'apiKey' ? PROVIDER_KEY_SERVICES : CONNECTION_SERVICES).filter((s) =>
     s.toLowerCase().includes(query.trim().toLowerCase())
   );
   const guide = guideFor(service);
-  const q = shareQuery.trim().toLowerCase();
-  // Rows: owner + teammates vs. agents (or the one-line empty state). 48px rows, 4px gaps.
-  const shareRows = Math.max(1 + sharedUsers.length, Math.max(granted.length, 1));
-  const shareListMinHeight = Math.min(shareRows, 5) * 48 + (Math.min(shareRows, 5) - 1) * 4;
-  const shareCandidates =
-    shareTab === 'users'
-      ? teammates
-          .filter((t) => !sharedUsers.includes(t.email))
-          .filter((t) => `${t.name} ${t.email}`.toLowerCase().includes(q))
-          .map((t) => ({ id: t.email, primary: t.email, secondary: t.name }))
-      : agents
-          .filter((a) => !granted.includes(a))
-          .filter((a) => a.toLowerCase().includes(q))
-          .map((a) => ({ id: a, primary: a, secondary: '' }));
-
   const reset = () => {
     setStep('service');
     setQuery('');
@@ -188,22 +194,11 @@ export function AddApiKeyDialog({
     setChecking(false);
     setError('');
     setChecked(null);
-    setGranted([]);
-    setSharedUsers([]);
-    setShareTab('users');
-    setShareQuery('');
-    setShareListOpen(false);
+    setAudience(EMPTY_AUDIENCE);
   };
 
-  const finish = () => {
-    if (checked)
-      onAdded({
-        ...checked,
-        agents: granted,
-        teammates: sharedUsers
-          .map((email) => teammates.find((t) => t.email === email)?.name)
-          .filter((name): name is string => Boolean(name)),
-      });
+  const finish = (shared: ShareAudience = audience) => {
+    if (checked) onAdded({ ...checked, kind, audience: shared });
     reset();
     onOpenChange(false);
   };
@@ -214,6 +209,8 @@ export function AddApiKeyDialog({
     if (checking) return;
     // The key is saved once the check passes; closing the share step keeps it.
     if (step === 'share') return finish();
+    // Closing an unconfirmed broad share keeps the credential private (agents stay).
+    if (step === 'confirm') return finish({ ...EMPTY_AUDIENCE, agents: audience.agents });
     reset();
     onOpenChange(false);
   };
@@ -235,22 +232,27 @@ export function AddApiKeyDialog({
     if (!value || !displayName.trim() || checking) return;
     setError('');
     setChecking(true);
-    const toastId = toast.loading(`Checking your ${service} key…`, { position: 'top-center' });
+    const toastId = notifyLoading(`Checking your ${service} ${noun}…`);
     setTimeout(() => {
       setChecking(false);
       if (!simulateProviderCheck(value)) {
         // The error belongs on the field it's about; no error toast.
         toast.dismiss(toastId);
-        setError(`${service} didn't accept this key. Check that you copied all of it, then paste it again.`);
+        setError(`${service} didn't accept this ${noun}. Check that you copied all of it, then paste it again.`);
         setKey('');
         return;
       }
-      toast.success(`${service} key is active`, { id: toastId, position: 'top-center' });
+      const runsAs = simulateRunsAs(kind, service, value);
+      notifySuccess(
+        kind === 'apiKey' ? `${service} key is active` : `Connected as ${runsAs.handle} on ${service}`,
+        toastId
+      );
       setChecked({
         name: displayName.trim(),
         service,
         organization: organization.trim(),
         keyPreview: maskKey(value),
+        runsAs,
       });
       setStep('share');
     }, 1600);
@@ -262,10 +264,11 @@ export function AddApiKeyDialog({
         {step === 'service' && (
           <>
             <DialogHeader className="space-y-[9px]">
-              <DialogTitle>Add provider API key</DialogTitle>
+              <DialogTitle>{kind === 'apiKey' ? 'Add provider API key' : 'Add shared connection'}</DialogTitle>
               <DialogDescription className="pr-6">
-                Choose the service this key is for. Keys belong to the workspace and keep
-                working if the person who added them leaves.
+                {kind === 'apiKey'
+                  ? 'Choose the service this key is for. Keys belong to the workspace and keep working if the person who added them leaves.'
+                  : "Choose the tool to connect once for your team. People you share it with use this account instead of their own."}
               </DialogDescription>
             </DialogHeader>
             {/* n8n-style combobox: the list floats over the modal instead of growing it. */}
@@ -387,8 +390,17 @@ export function AddApiKeyDialog({
                 Connect {service}
               </DialogTitle>
               <DialogDescription className="pr-6">
-                Paste {/^[AEIOU]/.test(service) ? 'an' : 'a'} {service} API key so your agents can
-                call it on the workspace&apos;s account.
+                {kind === 'apiKey' ? (
+                  <>
+                    Paste {/^[AEIOU]/.test(service) ? 'an' : 'a'} {service} API key so your agents can
+                    call it on the workspace&apos;s account.
+                  </>
+                ) : (
+                  <>
+                    Paste a {service} token. Everyone you share this with will act as the account
+                    that owns it.
+                  </>
+                )}
               </DialogDescription>
             </DialogHeader>
             <form
@@ -400,7 +412,7 @@ export function AddApiKeyDialog({
             >
               {/* Guidance before the field: non-technical admins need to know where the key lives. */}
               <div className="rounded-lg border bg-muted/30 p-4">
-                <p className="text-sm font-medium text-foreground">Get your {service} key</p>
+                <p className="text-sm font-medium text-foreground">Get your {service} {noun}</p>
                 <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
                   {guide.steps.map((line) => (
                     <li key={line}>{line}</li>
@@ -417,16 +429,22 @@ export function AddApiKeyDialog({
                     <ExternalLink className="size-3.5" aria-hidden="true" />
                   </a>
                 )}
+                {kind === 'connection' && (
+                  <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+                    Use a token from a service account, not your personal account. Everyone you
+                    share with acts as whoever owns the token.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="new-api-key">API key</Label>
+                <Label htmlFor="new-api-key">{kind === 'apiKey' ? 'API key' : 'Access token'}</Label>
                 <Input
                   id="new-api-key"
                   type="password"
                   autoComplete="off"
                   autoFocus
-                  placeholder={`Paste your ${service} key`}
+                  placeholder={`Paste your ${service} ${noun}`}
                   value={key}
                   disabled={checking}
                   aria-invalid={Boolean(error)}
@@ -449,7 +467,7 @@ export function AddApiKeyDialog({
                   ) : mismatch ? (
                     <>
                       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-                      This looks like {/^[AEIOU]/.test(mismatch) ? 'an' : 'a'} {mismatch} key.
+                      This looks like {/^[AEIOU]/.test(mismatch) ? 'an' : 'a'} {mismatch} {noun}.
                       <button
                         type="button"
                         onClick={() => setService(mismatch)}
@@ -466,7 +484,7 @@ export function AddApiKeyDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="new-api-key-name">Key name</Label>
+                <Label htmlFor="new-api-key-name">{kind === 'apiKey' ? 'Key name' : 'Connection name'}</Label>
                 <Input
                   id="new-api-key-name"
                   placeholder="e.g. Production key"
@@ -540,179 +558,55 @@ export function AddApiKeyDialog({
           <>
             <DialogHeader>
               <DialogTitle>Share {checked.name}</DialogTitle>
-              {/* Screen readers still get the context the visible subcopy used to carry. */}
               <DialogDescription className="sr-only">
-                Choose who can use this key. No one can view the key itself.
+                Choose who can use this {noun}. No one can view the {noun} itself.
               </DialogDescription>
             </DialogHeader>
-
-            {/* Users | Agents, directly under the header (ElevenLabs pattern). */}
-            <div role="tablist" aria-label="Share with" className="mt-1 grid grid-cols-2 rounded-lg bg-muted p-1">
-              {(['users', 'agents'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  role="tab"
-                  aria-selected={shareTab === tab}
-                  onClick={() => {
-                    setShareTab(tab);
-                    setShareQuery('');
-                  }}
-                  className={cn(
-                    'rounded-md py-1.5 text-sm font-medium transition-colors',
-                    shareTab === tab
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  {tab === 'users' ? 'Users' : 'Agents'}
-                </button>
-              ))}
+            <div className="mt-1">
+              <ShareAccessPanel
+                kind={kind}
+                service={checked.service}
+                runsAs={checked.runsAs}
+                value={audience}
+                onChange={setAudience}
+                currentUserEmail={currentUser.email}
+                onUseServiceAccount={
+                  kind === 'connection'
+                    ? () => {
+                        // Start the token over; nothing has been shared yet.
+                        setChecked(null);
+                        setKey('');
+                        setStep('connect');
+                      }
+                    : undefined
+                }
+              />
             </div>
-
-            <div
-              className="relative"
-              onBlur={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget)) setShareListOpen(false);
-              }}
-            >
-              <div className="flex h-10 items-center gap-2 rounded-md border bg-background px-3 focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
-                <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <input
-                  aria-label={shareTab === 'users' ? 'Search teammates' : 'Search agents'}
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  placeholder={shareTab === 'users' ? 'Search by name or email' : 'Search agents'}
-                  value={shareQuery}
-                  onFocus={() => setShareListOpen(true)}
-                  // Still focused after picking someone, so a click must reopen the list too.
-                  onClick={() => setShareListOpen(true)}
-                  onChange={(e) => {
-                    setShareQuery(e.target.value);
-                    setShareListOpen(true);
-                  }}
-                />
-              </div>
-              {shareListOpen && (
-                <div
-                  role="listbox"
-                  aria-label={shareTab === 'users' ? 'Teammates' : 'Agents'}
-                  className="absolute left-0 right-0 top-full z-50 mt-2 max-h-56 overflow-y-auto rounded-md border bg-popover py-1 shadow-lg"
-                >
-                  {shareCandidates.map((option) => (
-                    <div
-                      key={option.id}
-                      role="option"
-                      aria-selected={false}
-                      tabIndex={-1}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        if (shareTab === 'users') setSharedUsers((prev) => [...prev, option.id]);
-                        else setGranted((prev) => [...prev, option.id]);
-                        setShareQuery('');
-                        setShareListOpen(false);
-                      }}
-                      className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-muted"
-                    >
-                      <span className="flex size-7 items-center justify-center rounded-md bg-muted">
-                        {shareTab === 'users' ? (
-                          <User className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                        ) : (
-                          <Bot className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{option.primary}</span>
-                      {option.secondary && (
-                        <span className="truncate text-xs text-muted-foreground">{option.secondary}</span>
-                      )}
-                    </div>
-                  ))}
-                  {!shareCandidates.length && (
-                    <p className="px-3 py-3 text-sm text-muted-foreground">
-                      {shareQuery.trim() ? 'No matches.' : 'Everyone is already added.'}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <ul
-              className="max-h-[260px] space-y-1 overflow-y-auto"
-              // Hug the taller of the two views so switching tabs never resizes the modal;
-              // grows as people or agents are added (scrolls past 5 rows).
-              style={{ minHeight: shareListMinHeight }} aria-label={shareTab === 'users' ? 'People with access' : 'Agents with access'}>
-              {shareTab === 'users' ? (
-                <>
-                  <li className="flex h-12 items-center gap-3 rounded-md px-1">
-                    <span className="flex size-9 items-center justify-center rounded-lg bg-muted">
-                      <User className="size-4 text-muted-foreground" aria-hidden="true" />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                      {currentUser.email} <span className="text-muted-foreground">(You)</span>
-                    </span>
-                    <span className="rounded-md border px-2 py-1 text-xs text-muted-foreground">Owner</span>
-                  </li>
-                  {sharedUsers.map((id) => {
-                    const person = teammates.find((t) => t.email === id);
-                    if (!person) return null;
-                    return (
-                      <li key={id} className="flex h-12 items-center gap-3 rounded-md px-1">
-                        <span className="flex size-9 items-center justify-center rounded-lg bg-muted">
-                          <User className="size-4 text-muted-foreground" aria-hidden="true" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm text-foreground">{person.email}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{person.name}</span>
-                        </span>
-                        <span className="text-xs text-muted-foreground">Can use</span>
-                        <button
-                          type="button"
-                          aria-label={`Remove ${person.email}`}
-                          onClick={() => setSharedUsers((prev) => prev.filter((u) => u !== id))}
-                          className="flex size-8 items-center justify-center rounded-md border text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="size-3.5" aria-hidden="true" />
-                        </button>
-                      </li>
-                    );
-                  })}
-                </>
-              ) : (
-                <>
-                  {granted.map((agent) => (
-                    <li key={agent} className="flex h-12 items-center gap-3 rounded-md px-1">
-                      <span className="flex size-9 items-center justify-center rounded-lg bg-muted">
-                        <Bot className="size-4 text-muted-foreground" aria-hidden="true" />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">{agent}</span>
-                      <span className="text-xs text-muted-foreground">Can use</span>
-                      <button
-                        type="button"
-                        aria-label={`Remove ${agent}`}
-                        onClick={() => setGranted((prev) => prev.filter((a) => a !== agent))}
-                        className="flex size-8 items-center justify-center rounded-md border text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="size-3.5" aria-hidden="true" />
-                      </button>
-                    </li>
-                  ))}
-                  {!granted.length && (
-                    <li className="flex h-12 items-center px-1 text-sm text-muted-foreground">
-                      No agents yet. A key does nothing until an agent can use it.
-                    </li>
-                  )}
-                </>
-              )}
-            </ul>
-
-            <div className="flex items-center justify-between gap-3 border-t pt-4">
-              <p className="text-xs text-muted-foreground">
-                {sharedUsers.length + 1} {sharedUsers.length ? 'people' : 'person'} ·{' '}
-                {granted.length} agent{granted.length === 1 ? '' : 's'}
-              </p>
-              <Button className="bg-[#171717] text-white hover:bg-[#171717]/85" onClick={() => finish()}>
+            <div className="flex justify-end border-t pt-4">
+              <Button
+                className="bg-[#171717] text-white hover:bg-[#171717]/85"
+                onClick={() =>
+                  needsShareConfirmation(audience, checked.runsAs) ? setStep('confirm') : finish()
+                }
+              >
                 Done
               </Button>
             </div>
+          </>
+        )}
+
+        {step === 'confirm' && checked && (
+          <>
+            <DialogHeader className="space-y-[9px]">
+              <DialogTitle>{shareConfirmTitle(audience, checked.runsAs)}</DialogTitle>
+              <DialogDescription className="pr-6">
+                {checked.name} · {checked.service}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-2">
+              <ShareConfirmBody kind={kind} service={checked.service} runsAs={checked.runsAs} audience={audience} />
+            </div>
+            <ShareConfirmActions audience={audience} onBack={() => setStep('share')} onConfirm={() => finish()} />
           </>
         )}
       </DialogContent>

@@ -544,7 +544,7 @@ function ManageServerDialog({
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-1.5"
+                className="gap-1.5 pl-2.5"
                 disabled={server.status === 'checking' || !server.enabled}
                 onClick={onTest}
               >
@@ -554,7 +554,7 @@ function ManageServerDialog({
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-1.5"
+                className="gap-1.5 pl-2.5"
                 onClick={() => onChange((s) => ({ ...s, enabled: !s.enabled }))}
               >
                 <Power className="size-3.5" aria-hidden="true" />
